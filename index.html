@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TON Safe Deposit</title>
+    <style>
+        :root { --accent: #0088cc; --bg: #0b0f1a; --card: #161e2d; --log-bg: #000000; --success: #10b981; }
+        body { font-family: 'Consolas', 'Monaco', monospace; background: var(--bg); color: #e2e8f0; margin: 0; padding: 20px; display: flex; flex-direction: column; align-items: center; }
+        
+        .container { width: 100%; max-width: 600px; }
+        .card { background: var(--card); padding: 25px; border-radius: 15px; box-shadow: 0 8px 32px rgba(0,0,0,0.5); text-align: center; border: 1px solid #2d3748; margin-bottom: 20px; }
+        
+        .balance-label { color: #94a3b8; font-size: 0.9em; text-transform: uppercase; letter-spacing: 1px; }
+        .balance-display { font-size: 3em; color: var(--success); margin: 10px 0; font-weight: bold; }
+        
+        input { width: 100%; padding: 15px; background: #0f172a; border: 1px solid #334155; color: #38bdf8; border-radius: 10px; margin-bottom: 15px; font-size: 1.2em; text-align: center; outline: none; transition: 0.3s; }
+        input:focus { border-color: var(--accent); box-shadow: 0 0 10px rgba(0, 136, 204, 0.2); }
+        
+        .btn { width: 100%; padding: 15px; border: none; border-radius: 10px; font-weight: bold; cursor: pointer; transition: 0.2s; font-size: 1em; text-transform: uppercase; }
+        .btn-primary { background: var(--accent); color: white; }
+        .btn-pay { background: var(--success); color: white; text-decoration: none; display: none; margin-top: 15px; line-height: 55px; height: 55px; box-shadow: 0 4px 15px rgba(16, 185, 129, 0.3); }
+        .btn:active { transform: scale(0.98); }
+
+        .info-panel { display: none; margin-top: 20px; padding: 15px; background: #1e293b; border-radius: 10px; border: 1px dashed var(--accent); }
+        .tag { color: #38bdf8; font-weight: bold; }
+
+        .log-container { background: var(--log-bg); border-radius: 10px; padding: 15px; border: 1px solid #334155; height: 300px; overflow-y: auto; font-size: 0.85em; box-shadow: inset 0 0 10px #000; }
+        .log-entry { margin-bottom: 6px; border-left: 3px solid #334155; padding-left: 10px; animation: fadeIn 0.3s ease; }
+        .log-success { border-left-color: var(--success); color: var(--success); }
+        .log-error { border-left-color: #ef4444; color: #ef4444; }
+        .log-time { color: #64748b; margin-right: 8px; font-size: 0.9em; }
+
+        @keyframes fadeIn { from { opacity: 0; transform: translateX(-10px); } to { opacity: 1; transform: translateX(0); } }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div class="card">
+        <div class="balance-label">Ваш личный баланс</div>
+        <div class="balance-display"><span id="balance">0.00</span> <small style="font-size: 0.5em">TON</small></div>
+        
+        <input type="number" id="amount" step="0.1" placeholder="Сумма пополнения">
+        <button class="btn btn-primary" id="main-btn" onclick="createInvoice()">Создать счет на оплату</button>
+
+        <div id="info-panel" class="info-panel">
+            <p>Комментарий к платежу: <span class="tag" id="display-comment"></span></p>
+            <a id="pay-link" href="#" class="btn btn-pay">ОТКРЫТЬ TON КОШЕЛЕК</a>
+            <p style="font-size: 0.8em; color: #94a3b8; margin-top: 10px;">Ожидание транзакции в блокчейне...</p>
+        </div>
+    </div>
+
+    <div class="log-container" id="log-window">
+        <div class="log-entry">Система инициализирована. API Key готов к работе.</div>
+    </div>
+</div>
+
+<script>
+    // ================= НАСТРОЙКИ =================
+    const WALLET_ADDR = "UQA3pwINrPEfzHHMlX17rTgeINTsRUNrPOnFkvOx7HN2HtNj"; // <--- ЗАМЕНИТЕ НА СВОЙ
+    const API_KEY = "0a09095ad9a7b58975f300fe9812b9c4472ea2650b5c2781fe7dd8f6961e73b2"; 
+    // =============================================
+
+    let currentBalance = parseFloat(localStorage.getItem('user_ton_balance')) || 0;
+    let checkInterval = null;
+    let invoiceStartTime = 0;
+    let isRequesting = false;
+    let processedHashes = new Set(); // Защита от двойного зачисления
+
+    document.getElementById('balance').innerText = currentBalance.toFixed(2);
+
+    function writeLog(text, type = '') {
+        const logWindow = document.getElementById('log-window');
+        const entry = document.createElement('div');
+        entry.className = `log-entry ${type ? 'log-' + type : ''}`;
+        const time = new Date().toLocaleTimeString();
+        entry.innerHTML = `<span class="log-time">[${time}]</span> ${text}`;
+        logWindow.prepend(entry);
+    }
+
+    function createInvoice() {
+        const amount = document.getElementById('amount').value;
+        if (!amount || amount < 0.01) {
+            alert("Минимальная сумма — 0.01 TON");
+            return;
+        }
+
+        // Генерация уникального ID для комментария
+        const comment = "INV" + Math.floor(100000 + Math.random() * 900000);
+        invoiceStartTime = Math.floor(Date.now() / 1000);
+        
+        // Показываем UI
+        document.getElementById('display-comment').innerText = comment;
+        document.getElementById('info-panel').style.display = 'block';
+        
+        // Ссылка
+        const nanoValue = Math.floor(amount * 1000000000);
+        const deeplink = `ton://transfer/${WALLET_ADDR}?amount=${nanoValue}&text=${comment}`;
+        document.getElementById('pay-link').href = deeplink;
+        document.getElementById('pay-link').style.display = 'block';
+
+        writeLog(`Счет создан: ${amount} TON. Ожидаем комментарий ${comment}`, 'success');
+
+        // Запуск цикла проверки
+        if (checkInterval) clearInterval(checkInterval);
+        checkInterval = setInterval(() => checkBlockchain(amount, comment), 3000);
+    }
+
+    async function checkBlockchain(targetAmount, targetComment) {
+        if (isRequesting) return; // Не спамим, если предыдущий запрос еще не вернулся
+        isRequesting = true;
+
+        writeLog(`Проверка входящих транзакций...`);
+
+        try {
+            const response = await fetch(`https://toncenter.com/api/v2/getTransactions?address=${WALLET_ADDR}&limit=15&api_key=${API_KEY}`);
+            const data = await response.json();
+
+            if (data.ok) {
+                const txs = data.result;
+                for (let tx of txs) {
+                    const hash = tx.transaction_id.hash;
+                    
+                    // 1. Проверка времени (только новые транзакции)
+                    if (tx.utime < invoiceStartTime) continue;
+
+                    // 2. Проверка хеша (защита от "бага 0.07")
+                    if (processedHashes.has(hash)) continue;
+
+                    const inMsg = tx.in_msg;
+                    if (inMsg && inMsg.message === targetComment) {
+                        const amountReceived = inMsg.value / 1000000000;
+                        
+                        if (amountReceived >= parseFloat(targetAmount)) {
+                            processedHashes.add(hash); // Мгновенно блокируем хеш
+                            applyPayment(amountReceived);
+                            break;
+                        }
+                    }
+                }
+            }
+        } catch (err) {
+            writeLog(`Ошибка API: ${err.message}`, 'error');
+        } finally {
+            isRequesting = false;
+        }
+    }
+
+    function applyPayment(amount) {
+        // Останавливаем проверку немедленно
+        clearInterval(checkInterval);
+        checkInterval = null;
+
+        // Обновляем баланс
+        currentBalance += amount;
+        localStorage.setItem('user_ton_balance', currentBalance);
+        
+        // Обновляем UI
+        document.getElementById('balance').innerText = currentBalance.toFixed(2);
+        document.getElementById('info-panel').style.display = 'none';
+        
+        writeLog(`ПОДТВЕРЖДЕНО: Получено ${amount} TON. Баланс обновлен.`, 'success');
+        alert(`Оплата принята! Зачислено: ${amount} TON`);
+    }
+</script>
+
+</body>
+</html>
